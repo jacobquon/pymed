@@ -7,7 +7,7 @@ import xml.etree.ElementTree as xml
 from typing import Union
 
 from .helpers import batches
-from .article import PubMedArticle
+from .article import PubMedArticle, PMCArticle
 from .book import PubMedBookArticle
 
 
@@ -20,7 +20,7 @@ class PubMed(object):
     """
 
     def __init__(
-        self: object, tool: str = "my_tool", email: str = "my_email@example.com"
+        self: object, tool: str = "my_tool", email: str = "my_email@example.com", db: str = "pubmed"
     ) -> None:
         """ Initialization of the object.
 
@@ -38,13 +38,14 @@ class PubMed(object):
         # Store the input parameters
         self.tool = tool
         self.email = email
+        self.db = db
 
         # Keep track of the rate limit
         self._rateLimit = 3
         self._requestsMade = []
 
         # Define the standard / default query parameters
-        self.parameters = {"tool": tool, "email": email, "db": "pubmed"}
+        self.parameters = {"tool": tool, "email": email, "db": db}
 
     def query(self: object, query: str, max_results: int = 100):
         """ Method that executes a query agains the GraphQL schema, automatically
@@ -59,18 +60,14 @@ class PubMed(object):
         """
 
         # Retrieve the article IDs for the query
-        article_ids = self._getArticleIds(query=query, max_results=max_results)
+        article_ids = ",".join(article_id for article_id in self._getArticleIds(query=query, max_results=max_results))
 
         # Get the articles themselves
-        articles = list(
-            [
-                self._getArticles(article_ids=batch)
-                for batch in batches(article_ids, 250)
-            ]
-        )
+        articles = list(self._getArticles(article_ids=article_ids))
 
         # Chain the batches back together and return the list
-        return itertools.chain.from_iterable(articles)
+        # return itertools.chain.from_iterable(articles)
+        return articles
 
     def getTotalResultsCount(self: object, query: str) -> int:
         """ Helper method that returns the total number of results that match the query.
@@ -97,7 +94,7 @@ class PubMed(object):
 
         # Return the total number of results (without retrieving them)
         return total_results_count
-    
+
     def _exceededRateLimit(self) -> bool:
         """ Helper method to check if we've exceeded the rate limit.
 
@@ -173,11 +170,15 @@ class PubMed(object):
         # Parse as XML
         root = xml.fromstring(response)
 
-        # Loop over the articles and construct article objects
-        for article in root.iter("PubmedArticle"):
-            yield PubMedArticle(xml_element=article)
-        for book in root.iter("PubmedBookArticle"):
-            yield PubMedBookArticle(xml_element=book)
+        if self.db == "pubmed":
+            # Loop over the articles and construct article objects
+            for article in root.iter("PubmedArticle"):
+                yield PubMedArticle(xml_element=article)
+            for book in root.iter("PubmedBookArticle"):
+                yield PubMedBookArticle(xml_element=book)
+        elif self.db == "pmc":
+            for article in root.findall("article"):
+                yield PMCArticle(xml_element=article)
 
     def _getArticleIds(self: object, query: str, max_results: int) -> list:
         """ Helper method to retrieve the article IDs for a query.
@@ -199,6 +200,7 @@ class PubMed(object):
         # Add specific query parameters
         parameters["term"] = query
         parameters["retmax"] = 50000
+        parameters["sort"] = "relevance"
 
         # Calculate a cut off point based on the max_results parameter
         if max_results < parameters["retmax"]:
